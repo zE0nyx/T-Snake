@@ -1,0 +1,8 @@
+.dist/
+.venv/
+.vscode/
+
+new_game.py
+random_code.txt
+snake.py
+test_game.py
