@@ -4,21 +4,35 @@ import random
 from collections import deque
 from itertools import islice
 
+# Just some static game window measurements
+WIDTH_P = 26
+GH_MAX, GW_MAX = 25, 60
+GH_MIN, GW_MIN = 15, 30
+
+# typical game controls 
 UP, DOWN, LEFT, RIGHT = (-1, 0), (1, 0), (0, -1), (0, 1)
-OPPOSITE = {UP: DOWN, DOWN: UP, LEFT: RIGHT, RIGHT: LEFT}
+OPPOSITES = {UP: DOWN, DOWN: UP, LEFT: RIGHT, RIGHT: LEFT}
+KEYS = {
+    curses.KEY_UP: UP, ord("w"): UP, ord("W"): UP,
+    curses.KEY_DOWN: DOWN, ord("s"): DOWN, ord("S"): DOWN,
+    curses.KEY_LEFT: LEFT, ord("a"): LEFT, ord("A"): LEFT,
+    curses.KEY_RIGHT: RIGHT, ord("d"): RIGHT, ord("D"): RIGHT,
+}
 
-def game_window(m_height: int, m_width: int):
-    win = curses.newwin(m_height, m_width, 1, 4)
-    win.box()
-    win.refresh()
-    return win
+SNAKE, FOOD, TITLE, DIM = 1,2,3,4
 
 
-def score_window(height, width, y, x):
-    win = curses.newwin(height, width, y, x)
-    win.box("-","-")
-    win.refresh()
-    return win
+def make_windows(stdscr):
+    t_height, t_width = stdscr.getmaxyx()
+    g_height = min(GH_MAX, t_height - 2)
+    g_width = min(GW_MAX, t_width - WIDTH_P - 3)
+
+    if g_height < GH_MIN or g_width < GW_MIN:
+        return None, None
+
+    g_win = curses.newwin(g_height, g_width, 1, 1)
+    p_win = curses.newwin(g_height, WIDTH_P, 1, 2 + g_width)
+    return g_win, p_win
 
 
 class Snake_Game:
@@ -26,8 +40,8 @@ class Snake_Game:
         self.h, self.w = height, width
         mid_y, mid_x = height // 2, width // 2
         self.body = deque([(mid_y, mid_x - i) for i in range(3)])
-        self.direction = 0
-        self.next_direction = 0
+        self.direction = RIGHT
+        self.next_direction = RIGHT
         self.score = 0
         self.alive = True
         self.food = self.place_food()
@@ -40,9 +54,9 @@ class Snake_Game:
                 return pos
     
     def turn(self, new_dir):
-        if new_dir != OPPOSITE[self.direction]:
+        if new_dir != OPPOSITES[self.direction]:
             self.next_direction = new_dir
-    
+
     def step(self):
         self.direction = self.next_direction
         dy, dx = self.direction
@@ -62,6 +76,12 @@ class Snake_Game:
         
         if new_head in islice(self.body, 1, None):
             self.alive = False
+
+    def tick_seconds(self):
+        return max(0.05, 0.15 - self.score * 0.005)
+
+    def level(self):
+        return 1 + self.score // 5
 
 
 def draw_centered(win, y, text, attr=0):
@@ -90,39 +110,85 @@ def make_game(win, game, paused):
     
     win.noutrefresh()
 
+def make_panel(win, game, t_score):
+    win.erase()
+    win.box()
+    win.addstr(0, 2, " STATS ")
+
+    rows = [
+        ("Time", time.strftime("%H:%M:%S")),
+        ("Cur Score", str(game.score)),
+        ("High Score", str(t_score)),
+        ("Length", str(len(game.body))),
+        ("Level", str(game.level()))
+    ]
+    for i, (label, value) in enumerate(rows):
+        y = 2 + i
+        win.addstr(y, 2, f"{label:<11}")
+        win.addstr(y, 14, value)
+
+    controls = [
+        "Controls",
+        "W A S D - Move",
+        "P         pause",
+        "R         restart",
+        "Q         quit"
+    ]
+
+    start = 4 + len(rows)
+    for i, line in enumerate(controls):
+        win.addstr(start + i, 2, line)
+
+    win.noutrefresh()
+
 
 def main(stdscr):
-    curses.curs_set(0)
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+
     stdscr.refresh()
-    
-    t_height, t_width = stdscr.getmaxyx()
-    s_width = 30
-    
-    g_height = min(40, t_height - 1)
-    g_width = min(80, t_width - 4 - s_width - 2)
-    
-    if g_width < 20 or g_height < 10:
-        stdscr.addstr(0, 0, "Terminal too small, enlarge it and restart. Press any key.")
-        stdscr.getch()
+
+    gwin, pwin = make_windows(stdscr)
+    if gwin is None:
+        print("Terminal too small enlarge it to play the game")
         return
-    
-    win_g = game_window(g_height, g_width)
-    win_g.keypad(True)
-    win_g.timeout(100)
-    
-    s_x = 4 + g_width + 2
-    s_height = min(10, g_height)
-    win_s = score_window(s_height, s_width, 1, s_x)
-    s_width = min(30, t_width - s_x - 1)
+
+    gwin.keypad(True)
+    h, w = gwin.getmaxyx()
+
+    game = Snake_Game(h, w)
+    score = 0
+    paused = False
+    n_step = time.monotonic()
 
     while True:
-        current_time = time.strftime("%H:%M:%S")
-        win_s.addstr(1, 2, f"{current_time}")
-        win_s.refresh()
-        
-        key = win_g.getch()
-        if key in (ord('q'), ord('Q')):
+        wait_t = max(0, int((n_step - time.monotonic()) * 1000))
+        gwin.timeout(wait_t)
+        key = gwin.getch()
+
+        if key in (ord("q"), ord("Q")):
             break
+        elif key in (ord("p"), ord("P")) and game.alive():
+            paused = not paused
+        elif key in (ord("r"), ord("R")):
+            game = Snake_Game(h, w)
+            paused = False
+        elif key in KEYS and not paused:
+            game.turn(KEYS[key])
+
+        if time.monotonic() >= n_step:
+            if game.alive and not paused:
+                game.step()
+                score = max(score, game.score)
+
+            make_game(gwin, game, paused)
+            make_panel(pwin, game, score)
+            curses.doupdate()
+
+            n_step = time.monotonic() + game.tick_seconds()
 
 
-curses.wrapper(main)
+if __name__ == "__main__":
+    curses.wrapper(main)
